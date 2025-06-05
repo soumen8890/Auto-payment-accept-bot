@@ -1,11 +1,14 @@
+#!/usr/bin/env python3
 import logging
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
     filters,
-    ConversationHandler
+    ConversationHandler,
+    ContextTypes
 )
 from config import settings
 from database.database import get_db, Base, engine
@@ -20,19 +23,17 @@ from handlers import (
 from services.subscription_service import SubscriptionService
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from utils.logger import setup_logger
 
 # Set up logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 # Define conversation states
-PAYMENT, UTR_VERIFICATION = range(2)
+PAYMENT, UTR_VERIFICATION, PAYTM_PAYMENT = range(3)
 
-async def post_init(application: Application):
+async def post_init(application: Application) -> None:
     """Initialize database and create tables"""
+    logger.info("Initializing database...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
@@ -43,11 +44,17 @@ async def post_init(application: Application):
         IntervalTrigger(hours=24),
         args=[application]
     )
+    scheduler.add_job(
+        send_subscription_reminders,
+        IntervalTrigger(hours=12),
+        args=[application]
+    )
     scheduler.start()
     logger.info("Scheduled jobs started")
 
-async def check_expired_subscriptions(app: Application):
+async def check_expired_subscriptions(app: Application) -> None:
     """Background job to check for expired subscriptions"""
+    logger.info("Running expired subscriptions check...")
     db = next(get_db())
     try:
         subscription_service = SubscriptionService(db)
@@ -58,8 +65,35 @@ async def check_expired_subscriptions(app: Application):
     finally:
         db.close()
 
-def main():
-    # Initialize database session
+async def send_subscription_reminders(app: Application) -> None:
+    """Background job to send subscription renewal reminders"""
+    logger.info("Sending subscription reminders...")
+    db = next(get_db())
+    try:
+        from services.notification_service import NotificationService
+        from database.repositories import SubscriptionRepository
+        
+        subscription_repo = SubscriptionRepository(db)
+        notification_service = NotificationService()
+        
+        # Get subscriptions expiring in 3 days
+        expiring_subs = subscription_repo.get_expiring_subscriptions(days=3)
+        
+        for sub in expiring_subs:
+            days_left = (sub.end_date - datetime.now()).days
+            await notification_service.send_subscription_reminder(
+                sub.user.telegram_id,
+                days_left
+            )
+        
+        logger.info(f"Sent reminders to {len(expiring_subs)} users")
+    except Exception as e:
+        logger.error(f"Error sending reminders: {str(e)}")
+    finally:
+        db.close()
+
+def setup_handlers(application: Application) -> None:
+    """Configure all bot handlers"""
     db = next(get_db())
     
     # Initialize handlers
@@ -69,16 +103,7 @@ def main():
     user_handlers = UserHandlers(db)
     group_handlers = GroupHandlers(db)
     
-    # Create Application
-    application = Application.builder() \
-        .token(settings.BOT_TOKEN) \
-        .post_init(post_init) \
-        .build()
-    
-    # Add error handler
-    application.add_error_handler(error_handler)
-    
-    # Conversation handler for payment flow
+    # Payment conversation handler
     payment_conv_handler = ConversationHandler(
         entry_points=[CommandHandler('subscribe', payment_handlers.request_payment)],
         states={
@@ -88,6 +113,9 @@ def main():
             ],
             UTR_VERIFICATION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, payment_handlers.handle_utr)
+            ],
+            PAYTM_PAYMENT: [
+                CallbackQueryHandler(payment_handlers.handle_paytm_status, pattern='^paytm_')
             ]
         },
         fallbacks=[CommandHandler('cancel', user_handlers.cancel_conversation)],
@@ -103,10 +131,19 @@ def main():
     application.add_handler(CommandHandler('autorenew', subscription_handlers.toggle_auto_renew))
     
     # Admin commands
-    application.add_handler(CommandHandler('stats', admin_handlers.admin_stats))
-    application.add_handler(CommandHandler('manage_user', admin_handlers.manage_user))
+    admin_filter = filters.User(user_id=settings.ADMIN_IDS)
+    application.add_handler(CommandHandler(
+        'stats', 
+        admin_handlers.admin_stats, 
+        filters=admin_filter
+    ))
+    application.add_handler(CommandHandler(
+        'manage_user', 
+        admin_handlers.manage_user, 
+        filters=admin_filter
+    ))
     
-    # Group handlers
+    # Group management
     application.add_handler(MessageHandler(
         filters.StatusUpdate.NEW_CHAT_MEMBERS,
         group_handlers.new_member
@@ -116,9 +153,40 @@ def main():
         group_handlers.left_member
     ))
     
+    # Add error handler
+    application.add_error_handler(error_handler)
+
+def main() -> None:
+    """Run the bot"""
+    # Create Application
+    application = Application.builder() \
+        .token(settings.BOT_TOKEN) \
+        .post_init(post_init) \
+        .build()
+    
+    # Set up handlers
+    setup_handlers(application)
+    
     # Run the bot
     logger.info("Starting bot...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    if settings.WEBHOOK_MODE:
+        from utils.helpers import get_ist_time
+        webhook_url = f"{settings.WEBHOOK_URL}/{settings.BOT_TOKEN}"
+        
+        logger.info(f"Starting webhook at {webhook_url}")
+        application.run_webhook(
+            listen=settings.WEBHOOK_LISTEN,
+            port=settings.WEBHOOK_PORT,
+            url_path=settings.BOT_TOKEN,
+            webhook_url=webhook_url,
+            cert=settings.WEBHOOK_SSL_CERT if settings.WEBHOOK_SSL_CERT else None
+        )
+    else:
+        logger.info("Starting in polling mode...")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.critical(f"Bot crashed: {str(e)}", exc_info=True)
