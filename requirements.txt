@@ -1,0 +1,48 @@
+# Core Dependencies
+python-telegram-bot==20.3
+python-dotenv==1.0.0
+requests==2.31.0
+
+# Database
+sqlalchemy==2.0.19
+asyncpg==0.28.0
+aiosqlite==0.18.0
+alembic==1.12.0
+psycopg2-binary==2.9.7
+
+# Payment Gateways
+paytmchecksum==1.5
+pycryptodome==3.18.0
+
+# Scheduler & Background Jobs
+apscheduler==3.10.1
+
+# Date/Time Handling
+pytz==2023.3
+python-dateutil==2.8.2
+
+# Development & Debugging
+pytest==7.4.0
+pytest-asyncio==0.21.1
+pytest-mock==3.11.1
+pytest-cov==4.1.0
+
+# Logging
+loguru==0.7.0
+structlog==23.1.0
+
+# Web (for webhook mode)
+fastapi==0.95.2
+uvicorn==0.22.0
+httpx==0.24.1
+
+# Utilities
+python-magic==0.4.27
+pyyaml==6.0.1
+tqdm==4.65.0
+
+# Type Checking (optional)
+mypy==1.5.1
+types-python-dateutil==2.8.19.14
+types-requests==2.31.0.1
+types-pyyaml==6.0.12.9
