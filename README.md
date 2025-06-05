@@ -50,5 +50,5 @@ A robust subscription management Telegram bot with integrated BharatPe UTR verif
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/bharatpe-paytm-bot.git
+   git clone https://github.com/soumen8890/Auto-payment-accept-bot
    cd bharatpe-paytm-bot
