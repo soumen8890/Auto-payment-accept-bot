@@ -1,0 +1,7 @@
+from database.database import get_db
+from database.repositories import UserRepository
+
+# Example usage
+db = next(get_db())
+user_repo = UserRepository(db)
+user = user_repo.get_by_telegram_id(123456789)
